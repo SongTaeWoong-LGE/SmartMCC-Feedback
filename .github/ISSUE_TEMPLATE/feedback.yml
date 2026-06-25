@@ -1,0 +1,104 @@
+name: "💬 피드백 / 개선 요청"
+description: "SmartMCC 사용 중 개선이 필요한 사항을 등록해주세요."
+title: "[피드백] "
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## SmartMCC 피드백 등록
+        사용 중 불편하셨거나 개선이 필요한 사항을 아래 양식에 맞게 작성해주세요.  
+        이미지는 드래그 앤 드롭으로 첨부하실 수 있습니다.
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: "📂 카테고리"
+      description: "해당하는 분야를 선택해주세요. (복수 선택 가능)"
+      multiple: true
+      options:
+        - "🖥️ UI (사용자 인터페이스)"
+        - "⚙️ 기능 (기능 오류 / 동작 이상)"
+        - "🔗 OV 연동 (OpenVPN / 외부 연동)"
+        - "📊 데이터 / 설정"
+        - "🚀 성능 (속도 / 메모리)"
+        - "📋 기타"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: "🔥 중요도"
+      description: "이슈의 심각도를 선택해주세요."
+      options:
+        - "🔴 긴급 (서비스 사용 불가)"
+        - "🟠 높음 (주요 기능 영향)"
+        - "🟡 보통 (불편하지만 사용 가능)"
+        - "🟢 낮음 (사소한 개선 사항)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: "📝 상황 설명"
+      description: "어떤 상황에서 문제가 발생했는지 상세히 설명해주세요."
+      placeholder: |
+        예시:
+        - 어떤 작업을 하던 중이었나요?
+        - 어떤 문제가 발생했나요?
+        - 기대했던 동작은 무엇인가요?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: "🔁 재현 방법"
+      description: "문제를 재현할 수 있는 단계를 작성해주세요."
+      placeholder: |
+        1. '...' 메뉴로 이동
+        2. '...' 버튼 클릭
+        3. '...' 입력
+        4. 오류 발생
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: "📸 오류 화면 / 첨부 이미지"
+      description: "오류 화면을 캡처하여 이 영역에 드래그 앤 드롭으로 첨부해주세요."
+      placeholder: "이미지를 이 곳에 드래그 앤 드롭하거나 클립보드에서 붙여넣기(Ctrl+V)하세요."
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: "🖥️ 환경 정보"
+      description: "사용 환경을 입력해주세요."
+      placeholder: |
+        - SmartMCC 버전:
+        - 운영체제 (OS):
+        - 기타 관련 정보:
+    validations:
+      required: false
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: "💡 개선 제안 (선택)"
+      description: "개선 방향에 대한 아이디어가 있으시면 자유롭게 작성해주세요."
+      placeholder: "예: 이 버튼을 누르면 ~하게 동작하면 좋겠습니다."
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: "✅ 제출 확인"
+      options:
+        - label: "위 내용을 충실히 작성하였으며, 동일한 이슈가 이미 등록되어 있지 않음을 확인했습니다."
+          required: true

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: SmartMCC 공식 문서
+    url: https://github.com/minsko-phd/SmartMCC
+    about: SmartMCC 개발 레포지토리입니다.

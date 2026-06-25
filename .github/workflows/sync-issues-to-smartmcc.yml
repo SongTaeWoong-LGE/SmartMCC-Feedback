@@ -1,0 +1,104 @@
+name: Sync Feedback Issues to SmartMCC
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+      - closed
+      - reopened
+      - labeled
+      - unlabeled
+
+jobs:
+  sync-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+
+    steps:
+      - name: Sync issue to minsko-phd/SmartMCC
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
+          script: |
+            const issue = context.payload.issue;
+            const action = context.payload.action;
+            const sourceRepo = context.repo;
+
+            const targetOwner = 'minsko-phd';
+            const targetRepo = 'SmartMCC';
+
+            const sourceLink = `https://github.com/${sourceRepo.owner}/${sourceRepo.repo}/issues/${issue.number}`;
+            const syncBadge = `\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #${issue.number}](${sourceLink})에서 자동 동기화되었습니다.**\n> 원본 등록자: @${issue.user.login}`;
+
+            const labels = issue.labels.map(l => l.name);
+            const syncableLabels = labels.filter(l => ['bug', 'feedback', 'enhancement'].includes(l));
+
+            // 이미 동기화된 이슈 검색
+            const searchQuery = `repo:${targetOwner}/${targetRepo} is:issue "SmartMCC-Feedback #${issue.number}" in:body`;
+            const searchResult = await github.rest.search.issuesAndPullRequests({ q: searchQuery });
+            const existingIssue = searchResult.data.items.find(i =>
+              i.body && i.body.includes(`SmartMCC-Feedback #${issue.number}`)
+            );
+
+            if (action === 'opened') {
+              await github.rest.issues.create({
+                owner: targetOwner,
+                repo: targetRepo,
+                title: `[Feedback] ${issue.title}`,
+                body: (issue.body || '(내용 없음)') + syncBadge,
+                labels: syncableLabels
+              });
+              console.log(`✅ Issue created in ${targetOwner}/${targetRepo}`);
+
+            } else if (existingIssue) {
+              const num = existingIssue.number;
+
+              if (action === 'edited') {
+                await github.rest.issues.update({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: num,
+                  title: `[Feedback] ${issue.title}`,
+                  body: (issue.body || '(내용 없음)') + syncBadge
+                });
+                console.log(`✅ Issue #${num} updated`);
+
+              } else if (action === 'closed') {
+                await github.rest.issues.update({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: num,
+                  state: 'closed'
+                });
+                await github.rest.issues.createComment({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: num,
+                  body: `🔒 원본 피드백 이슈([SmartMCC-Feedback #${issue.number}](${sourceLink}))가 닫혔습니다.`
+                });
+                console.log(`✅ Issue #${num} closed`);
+
+              } else if (action === 'reopened') {
+                await github.rest.issues.update({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: num,
+                  state: 'open'
+                });
+                console.log(`✅ Issue #${num} reopened`);
+
+              } else if (action === 'labeled' || action === 'unlabeled') {
+                await github.rest.issues.update({
+                  owner: targetOwner,
+                  repo: targetRepo,
+                  issue_number: num,
+                  labels: syncableLabels
+                });
+                console.log(`✅ Issue #${num} labels synced`);
+              }
+
+            } else {
+              console.log(`⚠️ No matching issue found in ${targetOwner}/${targetRepo} for action: ${action}`);
+            }
