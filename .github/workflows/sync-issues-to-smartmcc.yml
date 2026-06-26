@@ -18,51 +18,40 @@ jobs:
       TARGET_OWNER: SongTaeWoong-LGE
       TARGET_REPO: SmartMCC-V2
       SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_ACTION: ${{ github.event.action }}
+      ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+      SOURCE_REPO: ${{ github.repository }}
 
     steps:
       - name: Sync issue to SmartMCC-V2
         run: |
           set -e
 
-          ISSUE_NUMBER="${{ github.event.issue.number }}"
-          ISSUE_TITLE="${{ github.event.issue.title }}"
-          ACTION="${{ github.event.action }}"
-          AUTHOR="${{ github.event.issue.user.login }}"
-          SOURCE_REPO="${{ github.repository }}"
           SOURCE_LINK="https://github.com/${SOURCE_REPO}/issues/${ISSUE_NUMBER}"
-
-          ISSUE_BODY=$(cat << 'BODY_EOF'
-          ${{ github.event.issue.body }}
-          BODY_EOF
-          )
-
-          SYNC_BADGE="\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #${ISSUE_NUMBER}](${SOURCE_LINK})에서 자동 동기화되었습니다.**\n> 원본 등록자: @${AUTHOR}"
-
+          SYNC_BADGE="$(printf '\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #%s](%s)에서 자동 동기화되었습니다.**\n> 원본 등록자: @%s' "$ISSUE_NUMBER" "$SOURCE_LINK" "$ISSUE_AUTHOR")"
           FULL_BODY="${ISSUE_BODY}${SYNC_BADGE}"
 
           # 이미 동기화된 이슈 검색
-          SEARCH_RESULT=$(curl -s \
+          MARKER="SmartMCC-Feedback #${ISSUE_NUMBER}"
+          ENCODED_MARKER=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$MARKER")
+          SEARCH_RESULT=$(curl -sf \
             -H "Authorization: Bearer ${SYNC_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+SmartMCC-Feedback+%23${ISSUE_NUMBER}+in:body")
+            "https://api.github.com/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+in:body+${ENCODED_MARKER}")
 
-          EXISTING_NUMBER=$(echo "$SEARCH_RESULT" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for item in data.get('items', []):
-    if f'SmartMCC-Feedback #{sys.argv[1]}' in (item.get('body') or ''):
-        print(item['number'])
-        break
-" "$ISSUE_NUMBER" 2>/dev/null || echo "")
+          EXISTING_NUMBER=$(echo "$SEARCH_RESULT" | jq -r \
+            --arg marker "$MARKER" \
+            '[.items[] | select(.body != null and (.body | contains($marker))) | .number] | first // empty')
 
-          if [ "$ACTION" = "opened" ]; then
-            PAYLOAD=$(python3 -c "
-import json, sys
-title = sys.argv[1]
-body = sys.argv[2]
-print(json.dumps({'title': f'[Feedback] {title}', 'body': body, 'labels': ['feedback']}))
-" "$ISSUE_TITLE" "$FULL_BODY")
+          if [ "$ISSUE_ACTION" = "opened" ]; then
+            PAYLOAD=$(jq -n \
+              --arg title "[Feedback] ${ISSUE_TITLE}" \
+              --arg body "$FULL_BODY" \
+              '{"title": $title, "body": $body, "labels": ["feedback"]}')
 
             RESPONSE=$(curl -s -w "\n%{http_code}" \
               -X POST \
@@ -74,20 +63,17 @@ print(json.dumps({'title': f'[Feedback] {title}', 'body': body, 'labels': ['feed
               "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues")
 
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            BODY=$(echo "$RESPONSE" | head -1)
-            echo "✅ Issue 생성 완료 (HTTP $HTTP_CODE)"
-            echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print('Created:', d.get('html_url',''))"
+            echo "$RESPONSE" | head -1 | jq -r '"✅ Issue 생성 완료: " + .html_url'
+            [ "$HTTP_CODE" = "201" ] || { echo "❌ 생성 실패 (HTTP $HTTP_CODE)"; exit 1; }
 
           elif [ -n "$EXISTING_NUMBER" ]; then
-            if [ "$ACTION" = "edited" ]; then
-              PAYLOAD=$(python3 -c "
-import json, sys
-title = sys.argv[1]
-body = sys.argv[2]
-print(json.dumps({'title': f'[Feedback] {title}', 'body': body}))
-" "$ISSUE_TITLE" "$FULL_BODY")
+            if [ "$ISSUE_ACTION" = "edited" ]; then
+              PAYLOAD=$(jq -n \
+                --arg title "[Feedback] ${ISSUE_TITLE}" \
+                --arg body "$FULL_BODY" \
+                '{"title": $title, "body": $body}')
 
-              curl -s \
+              curl -sf \
                 -X PATCH \
                 -H "Authorization: Bearer ${SYNC_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
@@ -97,8 +83,8 @@ print(json.dumps({'title': f'[Feedback] {title}', 'body': body}))
                 "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
               echo "✅ Issue #${EXISTING_NUMBER} 수정 완료"
 
-            elif [ "$ACTION" = "closed" ]; then
-              curl -s \
+            elif [ "$ISSUE_ACTION" = "closed" ]; then
+              curl -sf \
                 -X PATCH \
                 -H "Authorization: Bearer ${SYNC_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
@@ -108,8 +94,8 @@ print(json.dumps({'title': f'[Feedback] {title}', 'body': body}))
                 "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
               echo "✅ Issue #${EXISTING_NUMBER} 닫기 완료"
 
-            elif [ "$ACTION" = "reopened" ]; then
-              curl -s \
+            elif [ "$ISSUE_ACTION" = "reopened" ]; then
+              curl -sf \
                 -X PATCH \
                 -H "Authorization: Bearer ${SYNC_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
@@ -121,5 +107,5 @@ print(json.dumps({'title': f'[Feedback] {title}', 'body': body}))
             fi
 
           else
-            echo "⚠️ ${TARGET_OWNER}/${TARGET_REPO}에서 action '${ACTION}'에 맞는 기존 이슈를 찾지 못함"
+            echo "⚠️ action '${ISSUE_ACTION}'에 해당하는 기존 이슈를 ${TARGET_OWNER}/${TARGET_REPO}에서 찾지 못함"
           fi
