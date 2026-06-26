@@ -28,84 +28,75 @@ jobs:
     steps:
       - name: Sync issue to SmartMCC-V2
         run: |
-          set -e
+          set -euo pipefail
+
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "❌ SMARTMCC_SYNC_TOKEN 시크릿이 비어 있습니다. 레포 Settings > Secrets에 등록하세요."
+            exit 1
+          fi
+
+          API="https://api.github.com"
+          AUTH_H="Authorization: Bearer ${SYNC_TOKEN}"
+          ACCEPT_H="Accept: application/vnd.github+json"
+          VER_H="X-GitHub-Api-Version: 2022-11-28"
 
           SOURCE_LINK="https://github.com/${SOURCE_REPO}/issues/${ISSUE_NUMBER}"
           SYNC_BADGE="$(printf '\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #%s](%s)에서 자동 동기화되었습니다.**\n> 원본 등록자: @%s' "$ISSUE_NUMBER" "$SOURCE_LINK" "$ISSUE_AUTHOR")"
-          FULL_BODY="${ISSUE_BODY}${SYNC_BADGE}"
+          FULL_BODY="${ISSUE_BODY:-}${SYNC_BADGE}"
 
-          # 이미 동기화된 이슈 검색
+          # --- 이미 동기화된 이슈 검색 ---
           MARKER="SmartMCC-Feedback #${ISSUE_NUMBER}"
-          ENCODED_MARKER=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$MARKER")
-          SEARCH_RESULT=$(curl -sf \
-            -H "Authorization: Bearer ${SYNC_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+in:body+${ENCODED_MARKER}")
+          ENCODED_MARKER=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$MARKER")
+          SEARCH_CODE=$(curl -s -o search.json -w "%{http_code}" \
+            -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" \
+            "${API}/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+in:body+${ENCODED_MARKER}")
 
-          EXISTING_NUMBER=$(echo "$SEARCH_RESULT" | jq -r \
-            --arg marker "$MARKER" \
-            '[.items[] | select(.body != null and (.body | contains($marker))) | .number] | first // empty')
+          EXISTING_NUMBER=""
+          if [ "$SEARCH_CODE" = "200" ]; then
+            EXISTING_NUMBER=$(jq -r --arg marker "$MARKER" \
+              '[.items[]? | select(.body != null and (.body | contains($marker))) | .number] | first // empty' \
+              search.json)
+          else
+            echo "⚠️ 검색 API 응답 HTTP ${SEARCH_CODE} (계속 진행)"
+            cat search.json || true
+          fi
 
+          # --- 액션별 처리 ---
           if [ "$ISSUE_ACTION" = "opened" ]; then
-            PAYLOAD=$(jq -n \
-              --arg title "[Feedback] ${ISSUE_TITLE}" \
-              --arg body "$FULL_BODY" \
-              '{"title": $title, "body": $body, "labels": ["feedback"]}')
-
-            RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -X POST \
-              -H "Authorization: Bearer ${SYNC_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues")
-
-            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-            echo "$RESPONSE" | head -1 | jq -r '"✅ Issue 생성 완료: " + .html_url'
-            [ "$HTTP_CODE" = "201" ] || { echo "❌ 생성 실패 (HTTP $HTTP_CODE)"; exit 1; }
+            jq -n --arg title "[Feedback] ${ISSUE_TITLE}" --arg body "$FULL_BODY" \
+              '{title:$title, body:$body, labels:["feedback"]}' > payload.json
+            CODE=$(curl -s -o resp.json -w "%{http_code}" -X POST \
+              -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" -H "Content-Type: application/json" \
+              -d @payload.json "${API}/repos/${TARGET_OWNER}/${TARGET_REPO}/issues")
+            if [ "$CODE" = "201" ]; then
+              echo "✅ Issue 생성 완료: $(jq -r '.html_url' resp.json)"
+            else
+              echo "❌ Issue 생성 실패 (HTTP ${CODE})"; cat resp.json; exit 1
+            fi
 
           elif [ -n "$EXISTING_NUMBER" ]; then
+            TARGET_URL="${API}/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}"
             if [ "$ISSUE_ACTION" = "edited" ]; then
-              PAYLOAD=$(jq -n \
-                --arg title "[Feedback] ${ISSUE_TITLE}" \
-                --arg body "$FULL_BODY" \
-                '{"title": $title, "body": $body}')
-
-              curl -sf \
-                -X PATCH \
-                -H "Authorization: Bearer ${SYNC_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                -H "Content-Type: application/json" \
-                -d "$PAYLOAD" \
-                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
-              echo "✅ Issue #${EXISTING_NUMBER} 수정 완료"
+              jq -n --arg title "[Feedback] ${ISSUE_TITLE}" --arg body "$FULL_BODY" \
+                '{title:$title, body:$body}' > payload.json
+              CODE=$(curl -s -o resp.json -w "%{http_code}" -X PATCH \
+                -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" -H "Content-Type: application/json" \
+                -d @payload.json "$TARGET_URL")
+              [ "$CODE" = "200" ] && echo "✅ Issue #${EXISTING_NUMBER} 수정 완료" || { echo "❌ 수정 실패 (HTTP ${CODE})"; cat resp.json; exit 1; }
 
             elif [ "$ISSUE_ACTION" = "closed" ]; then
-              curl -sf \
-                -X PATCH \
-                -H "Authorization: Bearer ${SYNC_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                -H "Content-Type: application/json" \
-                -d '{"state": "closed"}' \
-                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
-              echo "✅ Issue #${EXISTING_NUMBER} 닫기 완료"
+              CODE=$(curl -s -o resp.json -w "%{http_code}" -X PATCH \
+                -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" -H "Content-Type: application/json" \
+                -d '{"state":"closed"}' "$TARGET_URL")
+              [ "$CODE" = "200" ] && echo "✅ Issue #${EXISTING_NUMBER} 닫기 완료" || { echo "❌ 닫기 실패 (HTTP ${CODE})"; cat resp.json; exit 1; }
 
             elif [ "$ISSUE_ACTION" = "reopened" ]; then
-              curl -sf \
-                -X PATCH \
-                -H "Authorization: Bearer ${SYNC_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                -H "Content-Type: application/json" \
-                -d '{"state": "open"}' \
-                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
-              echo "✅ Issue #${EXISTING_NUMBER} 다시 열기 완료"
+              CODE=$(curl -s -o resp.json -w "%{http_code}" -X PATCH \
+                -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" -H "Content-Type: application/json" \
+                -d '{"state":"open"}' "$TARGET_URL")
+              [ "$CODE" = "200" ] && echo "✅ Issue #${EXISTING_NUMBER} 다시 열기 완료" || { echo "❌ 열기 실패 (HTTP ${CODE})"; cat resp.json; exit 1; }
             fi
 
           else
-            echo "⚠️ action '${ISSUE_ACTION}'에 해당하는 기존 이슈를 ${TARGET_OWNER}/${TARGET_REPO}에서 찾지 못함"
+            echo "⚠️ action '${ISSUE_ACTION}'에 해당하는 기존 이슈를 ${TARGET_OWNER}/${TARGET_REPO}에서 찾지 못했습니다."
           fi
