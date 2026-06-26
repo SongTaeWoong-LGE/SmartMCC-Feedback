@@ -7,8 +7,6 @@ on:
       - edited
       - closed
       - reopened
-      - labeled
-      - unlabeled
 
 jobs:
   sync-issue:
@@ -16,94 +14,112 @@ jobs:
     permissions:
       issues: read
 
+    env:
+      TARGET_OWNER: SongTaeWoong-LGE
+      TARGET_REPO: SmartMCC-V2
+      SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
+
     steps:
-      - name: Sync issue to SongTaeWoong-LGE/SmartMCC-V2
-        uses: actions/github-script@v7
-        env:
-          SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const { getOctokit } = require('@actions/github');
-            const octokit = getOctokit(process.env.SYNC_TOKEN);
+      - name: Sync issue to SmartMCC-V2
+        run: |
+          set -e
 
-            const issue = context.payload.issue;
-            const action = context.payload.action;
-            const sourceRepo = context.repo;
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          ACTION="${{ github.event.action }}"
+          AUTHOR="${{ github.event.issue.user.login }}"
+          SOURCE_REPO="${{ github.repository }}"
+          SOURCE_LINK="https://github.com/${SOURCE_REPO}/issues/${ISSUE_NUMBER}"
 
-            const targetOwner = 'SongTaeWoong-LGE';
-            const targetRepo = 'SmartMCC-V2';
+          ISSUE_BODY=$(cat << 'BODY_EOF'
+          ${{ github.event.issue.body }}
+          BODY_EOF
+          )
 
-            const sourceLink = `https://github.com/${sourceRepo.owner}/${sourceRepo.repo}/issues/${issue.number}`;
-            const syncBadge = `\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #${issue.number}](${sourceLink})에서 자동 동기화되었습니다.**\n> 원본 등록자: @${issue.user.login}`;
+          SYNC_BADGE="\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #${ISSUE_NUMBER}](${SOURCE_LINK})에서 자동 동기화되었습니다.**\n> 원본 등록자: @${AUTHOR}"
 
-            const labels = issue.labels.map(l => l.name);
-            const syncableLabels = labels.filter(l => ['bug', 'feedback', 'enhancement'].includes(l));
+          FULL_BODY="${ISSUE_BODY}${SYNC_BADGE}"
 
-            // 이미 동기화된 이슈 검색
-            const searchQuery = `repo:${targetOwner}/${targetRepo} is:issue "SmartMCC-Feedback #${issue.number}" in:body`;
-            const searchResult = await octokit.rest.search.issuesAndPullRequests({ q: searchQuery });
-            const existingIssue = searchResult.data.items.find(i =>
-              i.body && i.body.includes(`SmartMCC-Feedback #${issue.number}`)
-            );
+          # 이미 동기화된 이슈 검색
+          SEARCH_RESULT=$(curl -s \
+            -H "Authorization: Bearer ${SYNC_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+SmartMCC-Feedback+%23${ISSUE_NUMBER}+in:body")
 
-            if (action === 'opened') {
-              await octokit.rest.issues.create({
-                owner: targetOwner,
-                repo: targetRepo,
-                title: `[Feedback] ${issue.title}`,
-                body: (issue.body || '(내용 없음)') + syncBadge,
-                labels: syncableLabels
-              });
-              console.log(`✅ Issue created in ${targetOwner}/${targetRepo}`);
+          EXISTING_NUMBER=$(echo "$SEARCH_RESULT" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for item in data.get('items', []):
+    if f'SmartMCC-Feedback #{sys.argv[1]}' in (item.get('body') or ''):
+        print(item['number'])
+        break
+" "$ISSUE_NUMBER" 2>/dev/null || echo "")
 
-            } else if (existingIssue) {
-              const num = existingIssue.number;
+          if [ "$ACTION" = "opened" ]; then
+            PAYLOAD=$(python3 -c "
+import json, sys
+title = sys.argv[1]
+body = sys.argv[2]
+print(json.dumps({'title': f'[Feedback] {title}', 'body': body, 'labels': ['feedback']}))
+" "$ISSUE_TITLE" "$FULL_BODY")
 
-              if (action === 'edited') {
-                await octokit.rest.issues.update({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  issue_number: num,
-                  title: `[Feedback] ${issue.title}`,
-                  body: (issue.body || '(내용 없음)') + syncBadge
-                });
-                console.log(`✅ Issue #${num} updated`);
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${SYNC_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues")
 
-              } else if (action === 'closed') {
-                await octokit.rest.issues.update({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  issue_number: num,
-                  state: 'closed'
-                });
-                await octokit.rest.issues.createComment({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  issue_number: num,
-                  body: `🔒 원본 피드백 이슈([SmartMCC-Feedback #${issue.number}](${sourceLink}))가 닫혔습니다.`
-                });
-                console.log(`✅ Issue #${num} closed`);
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | head -1)
+            echo "✅ Issue 생성 완료 (HTTP $HTTP_CODE)"
+            echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print('Created:', d.get('html_url',''))"
 
-              } else if (action === 'reopened') {
-                await octokit.rest.issues.update({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  issue_number: num,
-                  state: 'open'
-                });
-                console.log(`✅ Issue #${num} reopened`);
+          elif [ -n "$EXISTING_NUMBER" ]; then
+            if [ "$ACTION" = "edited" ]; then
+              PAYLOAD=$(python3 -c "
+import json, sys
+title = sys.argv[1]
+body = sys.argv[2]
+print(json.dumps({'title': f'[Feedback] {title}', 'body': body}))
+" "$ISSUE_TITLE" "$FULL_BODY")
 
-              } else if (action === 'labeled' || action === 'unlabeled') {
-                await octokit.rest.issues.update({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  issue_number: num,
-                  labels: syncableLabels
-                });
-                console.log(`✅ Issue #${num} labels synced`);
-              }
+              curl -s \
+                -X PATCH \
+                -H "Authorization: Bearer ${SYNC_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD" \
+                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
+              echo "✅ Issue #${EXISTING_NUMBER} 수정 완료"
 
-            } else {
-              console.log(`⚠️ No matching issue found in ${targetOwner}/${targetRepo} for action: ${action}`);
-            }
+            elif [ "$ACTION" = "closed" ]; then
+              curl -s \
+                -X PATCH \
+                -H "Authorization: Bearer ${SYNC_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Content-Type: application/json" \
+                -d '{"state": "closed"}' \
+                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
+              echo "✅ Issue #${EXISTING_NUMBER} 닫기 완료"
+
+            elif [ "$ACTION" = "reopened" ]; then
+              curl -s \
+                -X PATCH \
+                -H "Authorization: Bearer ${SYNC_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                -H "Content-Type: application/json" \
+                -d '{"state": "open"}' \
+                "https://api.github.com/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${EXISTING_NUMBER}" > /dev/null
+              echo "✅ Issue #${EXISTING_NUMBER} 다시 열기 완료"
+            fi
+
+          else
+            echo "⚠️ ${TARGET_OWNER}/${TARGET_REPO}에서 action '${ACTION}'에 맞는 기존 이슈를 찾지 못함"
+          fi
