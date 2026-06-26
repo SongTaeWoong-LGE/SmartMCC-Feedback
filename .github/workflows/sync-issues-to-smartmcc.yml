@@ -1,4 +1,4 @@
-name: Sync Feedback Issues to SmartMCC
+name: Sync Feedback Issues to SmartMCC-V2
 
 on:
   issues:
@@ -17,17 +17,22 @@ jobs:
       issues: read
 
     steps:
-      - name: Sync issue to minsko-phd/SmartMCC
+      - name: Sync issue to SongTaeWoong-LGE/SmartMCC-V2
         uses: actions/github-script@v7
+        env:
+          SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
         with:
-          github-token: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
+            const { getOctokit } = require('@actions/github');
+            const octokit = getOctokit(process.env.SYNC_TOKEN);
+
             const issue = context.payload.issue;
             const action = context.payload.action;
             const sourceRepo = context.repo;
 
-            const targetOwner = 'minsko-phd';
-            const targetRepo = 'SmartMCC';
+            const targetOwner = 'SongTaeWoong-LGE';
+            const targetRepo = 'SmartMCC-V2';
 
             const sourceLink = `https://github.com/${sourceRepo.owner}/${sourceRepo.repo}/issues/${issue.number}`;
             const syncBadge = `\n\n---\n> 📥 **이 이슈는 [SmartMCC-Feedback #${issue.number}](${sourceLink})에서 자동 동기화되었습니다.**\n> 원본 등록자: @${issue.user.login}`;
@@ -37,13 +42,13 @@ jobs:
 
             // 이미 동기화된 이슈 검색
             const searchQuery = `repo:${targetOwner}/${targetRepo} is:issue "SmartMCC-Feedback #${issue.number}" in:body`;
-            const searchResult = await github.rest.search.issuesAndPullRequests({ q: searchQuery });
+            const searchResult = await octokit.rest.search.issuesAndPullRequests({ q: searchQuery });
             const existingIssue = searchResult.data.items.find(i =>
               i.body && i.body.includes(`SmartMCC-Feedback #${issue.number}`)
             );
 
             if (action === 'opened') {
-              await github.rest.issues.create({
+              await octokit.rest.issues.create({
                 owner: targetOwner,
                 repo: targetRepo,
                 title: `[Feedback] ${issue.title}`,
@@ -56,7 +61,7 @@ jobs:
               const num = existingIssue.number;
 
               if (action === 'edited') {
-                await github.rest.issues.update({
+                await octokit.rest.issues.update({
                   owner: targetOwner,
                   repo: targetRepo,
                   issue_number: num,
@@ -66,13 +71,13 @@ jobs:
                 console.log(`✅ Issue #${num} updated`);
 
               } else if (action === 'closed') {
-                await github.rest.issues.update({
+                await octokit.rest.issues.update({
                   owner: targetOwner,
                   repo: targetRepo,
                   issue_number: num,
                   state: 'closed'
                 });
-                await github.rest.issues.createComment({
+                await octokit.rest.issues.createComment({
                   owner: targetOwner,
                   repo: targetRepo,
                   issue_number: num,
@@ -81,7 +86,7 @@ jobs:
                 console.log(`✅ Issue #${num} closed`);
 
               } else if (action === 'reopened') {
-                await github.rest.issues.update({
+                await octokit.rest.issues.update({
                   owner: targetOwner,
                   repo: targetRepo,
                   issue_number: num,
@@ -90,7 +95,7 @@ jobs:
                 console.log(`✅ Issue #${num} reopened`);
 
               } else if (action === 'labeled' || action === 'unlabeled') {
-                await github.rest.issues.update({
+                await octokit.rest.issues.update({
                   owner: targetOwner,
                   repo: targetRepo,
                   issue_number: num,
