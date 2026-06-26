@@ -18,8 +18,9 @@ body:
       options:
         - "🖥️ UI (사용자 인터페이스)"
         - "⚙️ 기능 (기능 오류 / 동작 이상)"
-        - "🔗 OV 연동 (OpenVPN / 외부 연동)"
-        - "📊 데이터 / 설정"
+        - "🔗 Omniverse 연동"
+        - "🤖 Robot 연동"
+        - "📊 데이터 / 설정 / 저장"
         - "🚀 성능 (속도 / 메모리)"
         - "💥 크래시 / 앱 종료"
         - "📋 기타"
@@ -48,6 +49,18 @@ body:
       required: true
 
   - type: textarea
+    id: steps
+    attributes:
+      label: "🔁 재현 방법"
+      description: "버그를 재현할 수 있는 단계를 작성해주세요."
+      placeholder: |
+        1. '...' 화면으로 이동
+        2. '...' 클릭
+        3. 버그 발생
+    validations:
+      required: true
+
+  - type: textarea
     id: expected
     attributes:
       label: "✅ 기대 동작"
@@ -66,23 +79,21 @@ body:
       required: true
 
   - type: textarea
-    id: steps
-    attributes:
-      label: "🔁 재현 방법"
-      description: "버그를 재현할 수 있는 단계를 작성해주세요."
-      placeholder: |
-        1. '...' 화면으로 이동
-        2. '...' 클릭
-        3. 버그 발생
-    validations:
-      required: true
-
-  - type: textarea
     id: screenshots
     attributes:
       label: "📸 오류 화면 / 로그"
-      description: "오류 화면 캡처 또는 로그를 이 영역에 드래그 앤 드롭으로 첨부해주세요."
-      placeholder: "이미지를 드래그 앤 드롭하거나 Ctrl+V로 붙여넣기 하세요. 로그가 있다면 코드 블록(```)으로 감싸서 붙여넣어 주세요."
+      description: |
+        오류 화면 캡처 이미지를 이 영역에 드래그 앤 드롭하거나 Ctrl+V로 붙여넣기 하세요.
+        로그가 있다면 코드 블록(```)으로 감싸서 붙여넣어 주세요.
+      placeholder: "[ 이미지를 여기에 드래그 앤 드롭 ]"
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: "🏷️ SmartMCC 버전"
+      placeholder: "예: v1.0.0_20260614"
     validations:
       required: false
 
@@ -91,8 +102,8 @@ body:
     attributes:
       label: "🖥️ 환경 정보"
       placeholder: |
-        - SmartMCC 버전:
         - 운영체제 (OS):
+        - Omniverse 버전 (해당 시):
         - 기타 관련 정보:
     validations:
       required: false
