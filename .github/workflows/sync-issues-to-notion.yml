@@ -1,0 +1,109 @@
+name: Sync Feedback Issues to Notion DB
+
+on:
+  issues:
+    types:
+      - opened
+
+jobs:
+  sync-to-notion:
+    runs-on: ubuntu-latest
+
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_DB_ID: "450ff6cc-7437-4d74-a406-78ee0d46f6af"
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+      ISSUE_URL: ${{ github.event.issue.html_url }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
+      CREATED_AT: ${{ github.event.issue.created_at }}
+
+    steps:
+      - name: Create Notion DB entry
+        run: |
+          set -euo pipefail
+
+          if [ -z "${NOTION_TOKEN}" ]; then
+            echo "❌ NOTION_TOKEN 시크릿이 비어 있습니다. 레포 Settings > Secrets에 등록하세요."
+            exit 1
+          fi
+
+          python3 << 'PYEOF'
+          import os, json, urllib.request, urllib.error
+
+          token   = os.environ["NOTION_TOKEN"]
+          db_id   = os.environ["NOTION_DB_ID"]
+          title   = os.environ.get("ISSUE_TITLE", "(제목 없음)")
+          number  = int(os.environ.get("ISSUE_NUMBER", "0"))
+          author  = os.environ.get("ISSUE_AUTHOR", "")
+          url     = os.environ.get("ISSUE_URL", "")
+          body    = os.environ.get("ISSUE_BODY", "") or ""
+          labels  = json.loads(os.environ.get("ISSUE_LABELS", "[]"))
+          created = os.environ.get("CREATED_AT", "")
+
+          # 유형 결정 (라벨 기반)
+          if "bug" in labels:
+              issue_type = "🐛 버그"
+          else:
+              issue_type = "💬 피드백"
+
+          # 심각도 파싱 (본문 텍스트에서 탐지)
+          severity = None
+          for key, name in [("긴급", "🔴 긴급"), ("높음", "🟠 높음"), ("보통", "🟡 보통"), ("낮음", "🟢 낮음")]:
+              if key in body:
+                  severity = name
+                  break
+
+          # 카테고리 파싱 (본문 텍스트에서 탐지)
+          cat_map = [
+              ("UI", "🖥️ UI"),
+              ("기능", "⚙️ 기능"),
+              ("Omniverse", "🔗 Omniverse 연동"),
+              ("Robot", "🤖 Robot 연동"),
+              ("데이터", "📊 데이터/설정"),
+              ("성능", "🚀 성능"),
+              ("크래시", "💥 크래시"),
+              ("기타", "📋 기타"),
+          ]
+          cats = []
+          for key, name in cat_map:
+              if key in body and name not in cats:
+                  cats.append(name)
+
+          props = {
+              "제목": {"title": [{"text": {"content": title[:2000]}}]},
+              "유형": {"select": {"name": issue_type}},
+              "카테고리": {"multi_select": [{"name": c} for c in cats]},
+              "상태": {"status": {"name": "시작 전"}},
+              "등록자": {"rich_text": [{"text": {"content": author}}]},
+              "Feedback 이슈번호": {"number": number},
+              "Feedback 링크": {"url": url},
+          }
+          if severity:
+              props["심각도"] = {"select": {"name": severity}}
+          if created:
+              props["등록일"] = {"date": {"start": created}}
+
+          payload = {"parent": {"database_id": db_id}, "properties": props}
+
+          req = urllib.request.Request(
+              "https://api.notion.com/v1/pages",
+              data=json.dumps(payload).encode("utf-8"),
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Notion-Version": "2022-06-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  data = json.loads(resp.read())
+                  print(f"✅ Notion 페이지 생성 완료: {data.get('url', '')}")
+          except urllib.error.HTTPError as e:
+              print(f"❌ Notion API 오류 (HTTP {e.code})")
+              print(e.read().decode("utf-8"))
+              raise
+          PYEOF
