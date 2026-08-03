@@ -1,4 +1,4 @@
-name: Sync Feedback Issues to SmartMCC-V2
+name: Sync Feedback Issues to SmartMCC repos
 
 on:
   issues:
@@ -11,12 +11,20 @@ on:
 jobs:
   sync-issue:
     runs-on: ubuntu-latest
+    strategy:
+      # 대상 레포를 여기에 추가하면 동일하게 동기화됩니다.
+      # SMARTMCC_SYNC_TOKEN 이 각 대상 레포의 issues:write 권한을 가져야 합니다.
+      matrix:
+        target_repo:
+          - SmartMCC-V2
+          - SmartMCC-Web
+      fail-fast: false
     permissions:
       issues: read
 
     env:
       TARGET_OWNER: SongTaeWoong-LGE
-      TARGET_REPO: SmartMCC-V2
+      TARGET_REPO: ${{ matrix.target_repo }}
       SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -26,7 +34,7 @@ jobs:
       SOURCE_REPO: ${{ github.repository }}
 
     steps:
-      - name: Sync issue to SmartMCC-V2
+      - name: Sync issue to ${{ matrix.target_repo }}
         run: |
           set -euo pipefail
 
