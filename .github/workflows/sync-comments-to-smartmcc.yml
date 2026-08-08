@@ -1,0 +1,94 @@
+name: Sync Feedback Comments to SmartMCC repos
+
+# 피드백 이슈에 달린 댓글을 미러 이슈(SmartMCC-V2/Web)에 복사한다.
+# 미러 이슈는 sync-issues-to-smartmcc.yml 이 만들며, 본문에
+# "[SmartMCC-Feedback #N]" 배지가 있어 그걸로 찾는다.
+#
+# 루프 방지: 역방향(SmartMCC-Web → Feedback) 동기화가 남긴 댓글에는
+# 'smartmcc-sync' 마커가 들어 있으므로 그 댓글은 다시 퍼가지 않는다.
+
+on:
+  issue_comment:
+    types:
+      - created
+
+jobs:
+  sync-comment:
+    # PR 코멘트 제외 + 동기화 마커 댓글 제외(루프 방지)
+    if: ${{ !github.event.issue.pull_request && !contains(github.event.comment.body, 'smartmcc-sync') }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target_repo:
+          - SmartMCC-V2
+          - SmartMCC-Web
+      fail-fast: false
+    permissions:
+      issues: read
+
+    env:
+      TARGET_OWNER: SongTaeWoong-LGE
+      TARGET_REPO: ${{ matrix.target_repo }}
+      SYNC_TOKEN: ${{ secrets.SMARTMCC_SYNC_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      COMMENT_BODY: ${{ github.event.comment.body }}
+      COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+      COMMENT_URL: ${{ github.event.comment.html_url }}
+
+    steps:
+      - name: Mirror comment to ${{ matrix.target_repo }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "❌ SMARTMCC_SYNC_TOKEN 시크릿이 비어 있습니다."
+            exit 1
+          fi
+
+          API="https://api.github.com"
+          AUTH_H="Authorization: Bearer ${SYNC_TOKEN}"
+          ACCEPT_H="Accept: application/vnd.github+json"
+          VER_H="X-GitHub-Api-Version: 2022-11-28"
+
+          # --- 미러 이슈 찾기 (본문의 "[SmartMCC-Feedback #N]" 배지 — 대괄호까지
+          #     맞춰서 #10 이 #100 에 오검색되지 않게 한다) ---
+          MARKER="[SmartMCC-Feedback #${ISSUE_NUMBER}]"
+          ENCODED_MARKER=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$MARKER")
+          SEARCH_CODE=$(curl -s -o search.json -w "%{http_code}" \
+            -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" \
+            "${API}/search/issues?q=repo:${TARGET_OWNER}/${TARGET_REPO}+is:issue+in:body+${ENCODED_MARKER}")
+
+          TARGET_NUMBER=""
+          if [ "$SEARCH_CODE" = "200" ]; then
+            TARGET_NUMBER=$(jq -r --arg marker "$MARKER" \
+              '[.items[]? | select(.body != null and (.body | contains($marker))) | .number] | first // empty' \
+              search.json)
+          fi
+          # 검색 인덱스 지연 대비 폴백: feedback 라벨 이슈를 직접 나열해서 찾는다.
+          if [ -z "$TARGET_NUMBER" ]; then
+            LIST_CODE=$(curl -s -o list.json -w "%{http_code}" \
+              -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" \
+              "${API}/repos/${TARGET_OWNER}/${TARGET_REPO}/issues?labels=feedback&state=all&per_page=100&sort=created&direction=desc")
+            if [ "$LIST_CODE" = "200" ]; then
+              TARGET_NUMBER=$(jq -r --arg marker "$MARKER" \
+                '[.[]? | select(.body != null and (.body | contains($marker))) | .number] | first // empty' \
+                list.json)
+            fi
+          fi
+          if [ -z "$TARGET_NUMBER" ]; then
+            echo "⚠️ ${TARGET_OWNER}/${TARGET_REPO} 에서 미러 이슈를 찾지 못했습니다 (marker: ${MARKER})."
+            exit 0
+          fi
+
+          # --- 댓글 복사 (원본 작성자/링크 배지 + 루프 방지 마커) ---
+          BADGE="$(printf '\n\n---\n> 💬 [SmartMCC-Feedback #%s 의 댓글](%s) — 작성자 @%s\n\n<!-- smartmcc-sync -->' \
+            "$ISSUE_NUMBER" "$COMMENT_URL" "$COMMENT_AUTHOR")"
+          jq -n --arg body "${COMMENT_BODY}${BADGE}" '{body:$body}' > payload.json
+          CODE=$(curl -s -o resp.json -w "%{http_code}" -X POST \
+            -H "$AUTH_H" -H "$ACCEPT_H" -H "$VER_H" -H "Content-Type: application/json" \
+            -d @payload.json "${API}/repos/${TARGET_OWNER}/${TARGET_REPO}/issues/${TARGET_NUMBER}/comments")
+          if [ "$CODE" = "201" ]; then
+            echo "✅ 댓글 복사 완료: $(jq -r '.html_url' resp.json)"
+          else
+            echo "❌ 댓글 복사 실패 (HTTP ${CODE})"; cat resp.json; exit 1
+          fi
